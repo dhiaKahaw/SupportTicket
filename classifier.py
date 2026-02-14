@@ -6,18 +6,25 @@ Uses TF-IDF vectorization + Logistic Regression.
 """
 
 import re
+import os
+import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend for saving plots
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 
 # ──────────────────────────────────────────────
 # 1. CONFIGURATION
 # ──────────────────────────────────────────────
 
-DATA_PATH = "twcs/twcs.csv"
+DATA_PATH = "../twcs/twcs.csv"
+OUTPUT_DIR = "output"
 
 CATEGORY_KEYWORDS = {
     "Technical": [
@@ -153,7 +160,82 @@ def train_and_evaluate(df: pd.DataFrame):
     print(cm_df)
     print()
 
-    return pipeline
+    return pipeline, X, y, X_test, y_test, y_pred, labels, cm
+
+
+# ──────────────────────────────────────────────
+# 4b. SAVE PLOTS
+# ──────────────────────────────────────────────
+
+def save_plots(df, pipeline, y, X_test, y_test, y_pred, labels, cm):
+    """Generate and save all plots to the output directory."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    sns.set_theme(style="whitegrid", palette="muted")
+    colors = ["#4A90D9", "#E8875B", "#5CB85C"]
+
+    # ── Plot 1: Category Distribution (bar + pie) ──
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    category_counts = df["category"].value_counts()
+    category_counts.plot(kind="bar", ax=axes[0], color=colors, edgecolor="white")
+    axes[0].set_title("Category Distribution", fontsize=14, fontweight="bold")
+    axes[0].set_ylabel("Count")
+    axes[0].set_xlabel("")
+    axes[0].tick_params(axis="x", rotation=0)
+    category_counts.plot(kind="pie", ax=axes[1], colors=colors, autopct="%1.1f%%",
+                          startangle=90, textprops={"fontsize": 11})
+    axes[1].set_title("Category Proportions", fontsize=14, fontweight="bold")
+    axes[1].set_ylabel("")
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUTPUT_DIR, "category_distribution.png"), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [+] Saved: {OUTPUT_DIR}/category_distribution.png")
+
+    # ── Plot 2: Confusion Matrix ──
+    fig, ax = plt.subplots(figsize=(7, 5))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+    disp.plot(ax=ax, cmap="Blues", values_format="d")
+    ax.set_title("Confusion Matrix", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUTPUT_DIR, "confusion_matrix.png"), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [+] Saved: {OUTPUT_DIR}/confusion_matrix.png")
+
+    # ── Plot 3: Top TF-IDF Features per Category ──
+    tfidf = pipeline.named_steps["tfidf"]
+    clf = pipeline.named_steps["clf"]
+    feature_names = np.array(tfidf.get_feature_names_out())
+    n_top = 10
+    n_classes = len(clf.classes_)
+    fig, axes = plt.subplots(1, n_classes, figsize=(6 * n_classes, 5))
+    if n_classes == 1:
+        axes = [axes]
+    for i, (label, ax) in enumerate(zip(clf.classes_, axes)):
+        top_idx = clf.coef_[i].argsort()[-n_top:][::-1]
+        top_feats = feature_names[top_idx]
+        top_weights = clf.coef_[i][top_idx]
+        ax.barh(top_feats[::-1], top_weights[::-1], color=colors[i % len(colors)])
+        ax.set_title(f"Top Features: {label}", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Weight")
+    plt.suptitle("Top TF-IDF Features per Category", fontsize=15, fontweight="bold", y=1.02)
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUTPUT_DIR, "top_features.png"), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [+] Saved: {OUTPUT_DIR}/top_features.png")
+
+    # ── Plot 4: Word Count Distribution ──
+    df["word_count"] = df["clean_text"].apply(lambda x: len(x.split()))
+    fig, ax = plt.subplots(figsize=(8, 4))
+    for cat, color in zip(sorted(df["category"].unique()), colors):
+        subset = df[df["category"] == cat]["word_count"]
+        ax.hist(subset, bins=30, alpha=0.6, label=cat, color=color, edgecolor="white")
+    ax.set_title("Word Count Distribution by Category", fontsize=14, fontweight="bold")
+    ax.set_xlabel("Word Count")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUTPUT_DIR, "word_count_distribution.png"), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [+] Saved: {OUTPUT_DIR}/word_count_distribution.png")
 
 
 # ──────────────────────────────────────────────
@@ -176,7 +258,14 @@ if __name__ == "__main__":
     df = load_and_label(DATA_PATH)
 
     # Train and evaluate
-    pipeline = train_and_evaluate(df)
+    pipeline, X, y, X_test, y_test, y_pred, labels, cm = train_and_evaluate(df)
+
+    # Save all plots
+    print("=" * 55)
+    print("           SAVING PLOTS")
+    print("=" * 55)
+    save_plots(df, pipeline, y, X_test, y_test, y_pred, labels, cm)
+    print()
 
     # Demo predictions on new messages
     demo_messages = [
